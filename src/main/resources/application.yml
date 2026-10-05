@@ -1,0 +1,48 @@
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework
+  error:
+    include-message: always
+
+spring:
+  application:
+    name: tally-api
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      # Neon suspends idle computes; keep connections short-lived so stale ones are recycled.
+      max-lifetime: 300000
+      idle-timeout: 60000
+      keepalive-time: 120000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+app:
+  # Accepts either a JDBC url (jdbc:postgresql://...) or the postgres:// / postgresql:// url Neon gives you.
+  database-url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/tally}
+  database-username: ${DATABASE_USERNAME:}
+  database-password: ${DATABASE_PASSWORD:}
+  # Base64 of 32 random bytes. Generate: openssl rand -base64 32
+  encryption-key: ${APP_ENCRYPTION_KEY:}
+  jwt-secret: ${APP_JWT_SECRET:}
+  session-days: ${APP_SESSION_DAYS:30}
+  # Set to false only for local http development.
+  secure-cookies: ${APP_SECURE_COOKIES:true}
+  # Comma separated. Only needed if the browser calls the API directly (the Next.js app proxies, so usually empty).
+  cors-origins: ${APP_CORS_ORIGINS:}
+  allow-registration: ${APP_ALLOW_REGISTRATION:true}
