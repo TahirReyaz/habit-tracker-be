@@ -6,7 +6,7 @@ server:
 
 spring:
   application:
-    name: tally-api
+    name: habit-tracker-api
   jpa:
     open-in-view: false
     hibernate:

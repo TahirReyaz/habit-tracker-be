@@ -11,11 +11,11 @@
     <relativePath/>
   </parent>
 
-  <groupId>com.tally</groupId>
-  <artifactId>tally-api</artifactId>
+  <groupId>com.habittracker</groupId>
+  <artifactId>habit-tracker-api</artifactId>
   <version>1.0.0</version>
-  <name>tally-api</name>
-  <description>Private habit tracker API</description>
+  <name>habit-tracker-api</name>
+  <description>Habit Tracker API</description>
 
   <properties>
     <java.version>21</java.version>
@@ -84,7 +84,7 @@
   </dependencies>
 
   <build>
-    <finalName>tally-api</finalName>
+    <finalName>habit-tracker-api</finalName>
     <plugins>
       <plugin>
         <groupId>org.springframework.boot</groupId>

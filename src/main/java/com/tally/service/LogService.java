@@ -19,9 +19,11 @@ public class LogService {
     private final EntryRepository entries;
     private final DayMetaRepository days;
     private final AccountService accounts;
+    private final WeekTargetService weekTargets;
 
     public LogService(HabitService habitService, HabitRepository habits, EntryRepository entries,
-                      DayMetaRepository days, AccountService accounts) {
+                      DayMetaRepository days, AccountService accounts, WeekTargetService weekTargets) {
+        this.weekTargets = weekTargets;
         this.habitService = habitService;
         this.habits = habits;
         this.entries = entries;
@@ -53,21 +55,60 @@ public class LogService {
         ScoreEngine.WeekScore score = ScoreEngine.scoreWeek(
                 shown.stream().map(LogService::info).toList(),
                 weekEntries.stream().map(e -> new ScoreEngine.Log(e.getHabitId(), e.getDay())).toList(),
-                start, today);
+                start, today, weekTargets.between(userId, ws, start, end));
 
         return new WeekResponse(start, end, today, ws, dayDtos,
                 shown.stream().map(HabitDto::of).toList(),
                 weekEntries.stream().map(EntryDto::of).toList(),
-                score.habits(), score.points(), score.target());
+                score.habits(), score.points(), score.target(),
+                weekTargets.forWeek(userId, ws, start));
     }
 
+    /**
+     * Saves one habit x day. What "filled in" means depends on the habit's input type:
+     * CHECK needs nothing, SELECT needs an option (new ones are added to the habit), TEXT needs non-empty text.
+     * The saved row is the day's point; to take the point away the client calls remove().
+     */
     @Transactional
-    public EntryDto upsert(UUID userId, EntryRequest r) {
+    public LogResult upsert(UUID userId, EntryRequest r) {
         Habit h = habitService.get(userId, r.habitId());
+        String value = trimToNull(r.value());
+        String note = trimToNull(r.note());
+        switch (h.getInputType()) {
+            case CHECK -> value = null;
+            case TEXT -> {
+                if (value == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Write something to log this day");
+                note = null;
+            }
+            case SELECT -> {
+                List<String> picked = new ArrayList<>();
+                if (r.values() != null) r.values().forEach(x -> { if (x != null && !x.isBlank()) picked.add(x); });
+                if (picked.isEmpty() && value != null) picked.add(value);
+                if (picked.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pick an option to log this day");
+                if (!h.isMultiSelect() && picked.size() > 1)
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This habit takes one option per day");
+                LinkedHashSet<String> clean = new LinkedHashSet<>();
+                for (String p : picked) {
+                    String o = habitService.canonicalOption(h, HabitService.cleanOption(p));
+                    habitService.ensureOption(h, o);
+                    clean.add(o);
+                }
+                value = String.join("\n", clean);
+            }
+        }
+        // logging a day before the habit's "counting from" date moves that date back,
+        // otherwise back-filled days would be stored but never scored
+        if (r.date().isBefore(h.getStartDate())) h.setStartDate(r.date());
+        final String v = value;
         Entry e = entries.findByUserIdAndHabitIdAndDay(userId, h.getId(), r.date())
                 .orElseGet(() -> new Entry(userId, h.getId(), r.date()));
-        e.setNote(r.note() == null || r.note().isBlank() ? null : r.note().trim());
-        return EntryDto.of(entries.save(e));
+        e.setValue(v);
+        e.setNote(note);
+        return new LogResult(EntryDto.of(entries.save(e)), h.getOptions(), h.getStartDate());
+    }
+
+    private static String trimToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     @Transactional
@@ -99,7 +140,9 @@ public class LogService {
             String k = ih.name().trim().toLowerCase(Locale.ROOT);
             if (byName.containsKey(k)) continue;
             Habit h = habitService.create(userId, new HabitRequest(ih.name().trim(), null,
-                    ih.kind() == null ? HabitKind.BUILD : ih.kind(), ih.weeklyTarget(), false, null, earliest, false), today);
+                    ih.kind() == null ? HabitKind.BUILD : ih.kind(),
+                    ih.inputType() == null ? InputType.TEXT : ih.inputType(), null, null, false,
+                    ih.weeklyTarget(), false, null, earliest, false), today);
             byName.put(k, h);
             created++;
         }
@@ -108,9 +151,20 @@ public class LogService {
             Habit h = byName.get(ie.habit().trim().toLowerCase(Locale.ROOT));
             if (h == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown habit in import: " + ie.habit());
             if (ie.date().isBefore(h.getStartDate())) h.setStartDate(ie.date());
+            String text = trimToNull(ie.text());
             Entry e = entries.findByUserIdAndHabitIdAndDay(userId, h.getId(), ie.date())
                     .orElseGet(() -> new Entry(userId, h.getId(), ie.date()));
-            e.setNote(ie.note() == null || ie.note().isBlank() ? null : ie.note().trim());
+            switch (h.getInputType()) {
+                case CHECK -> { e.setValue(null); e.setNote(text); }
+                case TEXT -> { e.setValue(text == null ? "✓" : text); e.setNote(null); }
+                case SELECT -> {
+                    String opt = text == null ? "Done" : habitService.canonicalOption(h, HabitService.cleanOption(
+                            text.length() > HabitService.MAX_OPTION_LENGTH ? text.substring(0, HabitService.MAX_OPTION_LENGTH) : text));
+                    habitService.ensureOption(h, opt);
+                    e.setValue(opt);
+                    e.setNote(null);
+                }
+            }
             entries.save(e);
             n++;
         }

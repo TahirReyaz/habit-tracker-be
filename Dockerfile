@@ -9,9 +9,9 @@ RUN mvn -q -B package -DskipTests
 # ---- run ----
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-RUN useradd --system --uid 1001 tally
-COPY --from=build /app/target/tally-api.jar app.jar
-USER tally
+RUN useradd --system --uid 1001 app
+COPY --from=build /app/target/habit-tracker-api.jar app.jar
+USER app
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseSerialGC -Xss512k"
 EXPOSE 8080
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

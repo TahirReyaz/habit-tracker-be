@@ -4,6 +4,8 @@ import com.tally.crypto.Encrypted;
 import jakarta.persistence.*;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -25,6 +27,19 @@ public class Habit {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 10)
     private HabitKind kind = HabitKind.BUILD;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "input_type", nullable = false, length = 10)
+    private InputType inputType = InputType.CHECK;
+
+    /** Option labels for SELECT habits, newline separated, encrypted at rest. */
+    @Convert(converter = Encrypted.class)
+    @Column(columnDefinition = "text")
+    private String options;
+
+    /** SELECT only: allow several options on the same day. */
+    @Column(name = "multi_select", nullable = false)
+    private boolean multiSelect;
 
     @Column(name = "weekly_target", nullable = false)
     private short weeklyTarget;
@@ -59,6 +74,16 @@ public class Habit {
     public void setAlias(String alias) { this.alias = alias; }
     public HabitKind getKind() { return kind; }
     public void setKind(HabitKind kind) { this.kind = kind; }
+    public InputType getInputType() { return inputType; }
+    public void setInputType(InputType inputType) { this.inputType = inputType; }
+    public List<String> getOptions() {
+        return options == null || options.isEmpty() ? List.of() : Arrays.asList(options.split("\n"));
+    }
+    public void setOptions(List<String> list) {
+        this.options = list == null || list.isEmpty() ? null : String.join("\n", list);
+    }
+    public boolean isMultiSelect() { return multiSelect; }
+    public void setMultiSelect(boolean multiSelect) { this.multiSelect = multiSelect; }
     public int getWeeklyTarget() { return weeklyTarget; }
     public void setWeeklyTarget(int weeklyTarget) { this.weeklyTarget = (short) weeklyTarget; }
     public boolean isPrivate() { return isPrivate; }

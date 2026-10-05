@@ -13,6 +13,7 @@ public interface EntryRepository extends JpaRepository<Entry, UUID> {
     List<Entry> findByUserIdOrderByDayAsc(UUID userId);
     Optional<Entry> findByUserIdAndHabitIdAndDay(UUID userId, UUID habitId, LocalDate day);
     Optional<Entry> findFirstByUserIdOrderByDayAsc(UUID userId);
+    List<Entry> findByUserIdAndHabitId(UUID userId, UUID habitId);
 
     /** (habitId, day) pairs only - avoids decrypting every note just to compute statistics. */
     @Query("select e.habitId, e.day from Entry e where e.userId = ?1")

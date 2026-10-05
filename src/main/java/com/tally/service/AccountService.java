@@ -21,11 +21,14 @@ public class AccountService {
     private final HabitRepository habits;
     private final EntryRepository entries;
     private final DayMetaRepository days;
+    private final WeekTargetRepository weekTargets;
     private final PasswordEncoder encoder;
     private final AttemptLimiter limiter;
 
     public AccountService(UserRepository users, HabitRepository habits, EntryRepository entries,
-                          DayMetaRepository days, PasswordEncoder encoder, AttemptLimiter limiter) {
+                          DayMetaRepository days, WeekTargetRepository weekTargets,
+                          PasswordEncoder encoder, AttemptLimiter limiter) {
+        this.weekTargets = weekTargets;
         this.users = users;
         this.habits = habits;
         this.entries = entries;
@@ -88,6 +91,8 @@ public class AccountService {
         out.put("account", MeResponse.of(u));
         out.put("habits", habits.findByUserIdOrderByPositionAscCreatedAtAsc(id).stream().map(HabitDto::of).toList());
         out.put("entries", entries.findByUserIdOrderByDayAsc(id).stream().map(EntryDto::of).toList());
+        out.put("weekTargets", weekTargets.findByUserId(id).stream()
+                .map(w -> Map.of("habitId", w.getHabitId(), "weekStart", w.getWeekStart(), "target", w.getTarget())).toList());
         out.put("days", days.findByUserIdOrderByDayAsc(id).stream()
                 .map(d -> new DayDto(d.getDay(), d.isRestDay(), d.getNote())).toList());
         return out;

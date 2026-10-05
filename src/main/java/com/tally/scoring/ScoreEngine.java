@@ -14,6 +14,8 @@ import java.util.*;
  *  - AVOID habit: every elapsed day in the week WITHOUT a logged slip is 1 point, capped at the target.
  *  - Days before a habit's start date never count.
  *  - Weekly total = sum of points / sum of targets of habits that had started by the end of that week.
+ *  - A week can override a habit's target (e.g. a holiday: 5 -> 4). Target 0 excuses the habit for that week:
+ *    it adds nothing to the total and neither counts toward nor breaks streaks / hit rate.
  */
 public final class ScoreEngine {
 
@@ -22,7 +24,17 @@ public final class ScoreEngine {
     public record HabitInfo(UUID id, Kind kind, int target, LocalDate startDate, boolean archived) {}
     public record Log(UUID habitId, LocalDate day) {}
 
-    public record HabitWeek(UUID habitId, int count, int points, int target, boolean started) {}
+    /** target = the target in force that week; baseTarget = the habit's usual target. */
+    public record HabitWeek(UUID habitId, int count, int points, int target, boolean started, int baseTarget) {
+        public boolean adjusted() { return target != baseTarget; }
+    }
+
+    /** Per-week target overrides: the target for (habit, week start), or null to use the habit's usual target. */
+    @FunctionalInterface
+    public interface Targets {
+        Integer forWeek(UUID habitId, LocalDate weekStart);
+        Targets NONE = (h, w) -> null;
+    }
     public record WeekScore(LocalDate start, int points, int target, List<HabitWeek> habits) {
         public double pct() { return target == 0 ? 0 : (double) points / target; }
     }
@@ -45,6 +57,11 @@ public final class ScoreEngine {
 
     /** Score one week. {@code logs} may contain logs outside the week; they are ignored. */
     public static WeekScore scoreWeek(List<HabitInfo> habits, Collection<Log> logs, LocalDate weekStart, LocalDate today) {
+        return scoreWeek(habits, logs, weekStart, today, Targets.NONE);
+    }
+
+    public static WeekScore scoreWeek(List<HabitInfo> habits, Collection<Log> logs, LocalDate weekStart, LocalDate today,
+                                      Targets targets) {
         LocalDate weekEnd = weekStart.plusDays(6);
         Map<UUID, Set<LocalDate>> byHabit = index(logs, weekStart, weekEnd);
         List<HabitWeek> out = new ArrayList<>();
@@ -52,12 +69,14 @@ public final class ScoreEngine {
         for (HabitInfo h : habits) {
             Set<LocalDate> days = byHabit.getOrDefault(h.id(), Set.of());
             boolean started = !h.startDate().isAfter(weekEnd);
+            Integer override = targets.forWeek(h.id(), weekStart);
+            int target = override == null ? h.target() : Math.max(0, Math.min(7, override));
             if (h.archived() && days.isEmpty()) continue;
             int count = 0, points = 0;
             if (started) {
                 if (h.kind() == Kind.BUILD) {
                     count = (int) days.stream().filter(d -> !d.isBefore(h.startDate())).count();
-                    points = Math.min(count, h.target());
+                    points = Math.min(count, target);
                 } else {
                     int slips = 0, eligible = 0;
                     for (LocalDate d = weekStart; !d.isAfter(weekEnd); d = d.plusDays(1)) {
@@ -66,12 +85,12 @@ public final class ScoreEngine {
                         if (days.contains(d)) slips++;
                     }
                     count = slips;
-                    points = Math.min(eligible - slips, h.target());
+                    points = Math.min(eligible - slips, target);
                 }
                 pts += points;
-                tgt += h.target();
+                tgt += target;
             }
-            out.add(new HabitWeek(h.id(), count, points, h.target(), started));
+            out.add(new HabitWeek(h.id(), count, points, target, started, h.target()));
         }
         return new WeekScore(weekStart, pts, tgt, out);
     }
@@ -82,12 +101,17 @@ public final class ScoreEngine {
      */
     public static Stats stats(List<HabitInfo> habits, List<Log> allLogs, Set<LocalDate> restDays,
                               int nWeeks, LocalDate today, int isoWeekStart) {
+        return stats(habits, allLogs, restDays, nWeeks, today, isoWeekStart, Targets.NONE);
+    }
+
+    public static Stats stats(List<HabitInfo> habits, List<Log> allLogs, Set<LocalDate> restDays,
+                              int nWeeks, LocalDate today, int isoWeekStart, Targets targets) {
         LocalDate thisWeek = weekStart(today, isoWeekStart);
         LocalDate from = thisWeek.minusWeeks(nWeeks - 1L);
         LocalDate to = thisWeek.plusDays(6);
 
         List<WeekScore> weeks = new ArrayList<>();
-        for (int i = 0; i < nWeeks; i++) weeks.add(scoreWeek(habits, allLogs, from.plusWeeks(i), today));
+        for (int i = 0; i < nWeeks; i++) weeks.add(scoreWeek(habits, allLogs, from.plusWeeks(i), today, targets));
 
         Map<UUID, Set<LocalDate>> all = index(allLogs, LocalDate.MIN, LocalDate.MAX);
 
@@ -102,6 +126,7 @@ public final class ScoreEngine {
                 HabitWeek hw = find(ws, h.id());
                 if (hw == null || !hw.started()) { weekly[i] = 0; continue; }
                 weekly[i] = hw.points();
+                if (hw.target() == 0) continue; // excused week
                 boolean completed = ws.start().plusDays(6).isBefore(today);
                 boolean hit = hw.points() >= hw.target();
                 if (completed || hit) {
@@ -122,7 +147,7 @@ public final class ScoreEngine {
             }
 
             // week streaks walk the full history, not just the range
-            int[] weekStreaks = weekStreaks(h, allLogs, today, isoWeekStart);
+            int[] weekStreaks = weekStreaks(h, allLogs, today, isoWeekStart, targets);
             int[] dayStreaks = dayStreaks(h, days, today);
 
             double hitRate = weeksCounted == 0 ? 0 : (double) weeksHit / weeksCounted;
@@ -168,7 +193,7 @@ public final class ScoreEngine {
     }
 
     /** [current, longest] count of consecutive weeks where the weekly target was met. */
-    static int[] weekStreaks(HabitInfo h, List<Log> allLogs, LocalDate today, int isoWeekStart) {
+    static int[] weekStreaks(HabitInfo h, List<Log> allLogs, LocalDate today, int isoWeekStart, Targets targets) {
         LocalDate first = weekStart(h.startDate(), isoWeekStart);
         LocalDate thisWeek = weekStart(today, isoWeekStart);
         if (first.isAfter(thisWeek)) return new int[]{0, 0};
@@ -176,17 +201,20 @@ public final class ScoreEngine {
         List<Log> mine = allLogs.stream().filter(l -> l.habitId().equals(h.id())).toList();
         int longest = 0, run = 0;
         List<Boolean> hits = new ArrayList<>();
+        boolean lastIsCurrent = false;
         for (LocalDate w = first; !w.isAfter(thisWeek); w = w.plusWeeks(1)) {
-            HabitWeek hw = scoreWeek(one, mine, w, today).habits().get(0);
+            HabitWeek hw = scoreWeek(one, mine, w, today, targets).habits().get(0);
+            if (hw.target() == 0) continue; // excused weeks neither extend nor break a streak
             boolean hit = hw.points() >= hw.target();
             hits.add(hit);
+            lastIsCurrent = w.equals(thisWeek);
             run = hit ? run + 1 : 0;
             longest = Math.max(longest, run);
         }
         // current: count back from this week; an unfinished current week doesn't break the streak
         int current = 0;
         int i = hits.size() - 1;
-        if (!hits.get(i)) i--;
+        if (i >= 0 && lastIsCurrent && !hits.get(i)) i--;
         for (; i >= 0 && hits.get(i); i--) current++;
         return new int[]{current, longest};
     }

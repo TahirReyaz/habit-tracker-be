@@ -47,4 +47,24 @@ class ScoreEngineTest {
         assertEquals(1, st.habits().get(1).currentDayStreak(), "clean days since last slip");
         assertEquals(1, st.days().stream().filter(DayCell::rest).count());
     }
+
+    @Test
+    void weekTargetOverrides() {
+        LocalDate prev = wk.minusWeeks(1);
+        List<Log> logs = new ArrayList<>();
+        for (int d = 0; d < 4; d++) logs.add(new Log(build, prev.plusDays(d)));
+        for (int d = 0; d < 5; d++) logs.add(new Log(build, prev.minusWeeks(1).plusDays(d)));
+        List<HabitInfo> one = List.of(habits.get(0));
+        ScoreEngine.Targets holiday = (h, w) -> w.equals(prev) ? 4 : null;
+        WeekScore adj = ScoreEngine.scoreWeek(one, logs, prev, today, holiday);
+        assertEquals(4, adj.points());
+        assertEquals(4, adj.target(), "holiday lowers the target from 5 to 4");
+        assertTrue(adj.habits().get(0).adjusted());
+        assertEquals(2, ScoreEngine.stats(one, logs, Set.of(), 4, today, 1, holiday).habits().get(0).longestWeekStreak());
+
+        ScoreEngine.Targets excused = (h, w) -> w.equals(prev) ? 0 : null;
+        Stats st = ScoreEngine.stats(one, logs, Set.of(), 4, today, 1, excused);
+        assertEquals(0, st.weeks().get(2).target(), "target 0 leaves the habit out of that week's total");
+        assertEquals(1, st.habits().get(0).weeksHit());
+    }
 }

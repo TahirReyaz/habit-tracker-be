@@ -3,6 +3,7 @@ package com.tally.web;
 import com.tally.security.CurrentUser;
 import com.tally.service.LogService;
 import com.tally.service.StatsService;
+import com.tally.service.WeekTargetService;
 import com.tally.web.dto.Dtos.*;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -17,8 +18,10 @@ import java.util.UUID;
 public class LogController {
     private final LogService logs;
     private final StatsService stats;
+    private final WeekTargetService weekTargets;
 
-    public LogController(LogService logs, StatsService stats) {
+    public LogController(LogService logs, StatsService stats, WeekTargetService weekTargets) {
+        this.weekTargets = weekTargets;
         this.logs = logs;
         this.stats = stats;
     }
@@ -31,7 +34,7 @@ public class LogController {
     }
 
     @PutMapping("/entries")
-    public EntryDto upsert(@Valid @RequestBody EntryRequest r) {
+    public LogResult upsert(@Valid @RequestBody EntryRequest r) {
         return logs.upsert(CurrentUser.id(), r);
     }
 
@@ -46,6 +49,14 @@ public class LogController {
     public DayDto day(@PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
                       @Valid @RequestBody DayRequest r) {
         return logs.setDay(CurrentUser.id(), date, r);
+    }
+
+    /** Change one habit's target for one week (e.g. a holiday). Returns the week, rescored. */
+    @PutMapping("/week-targets")
+    public WeekResponse weekTarget(@Valid @RequestBody WeekTargetRequest r, @RequestParam(required = false) String today) {
+        weekTargets.set(CurrentUser.id(), r.habitId(), r.date(), r.target());
+        LocalDate t = Http.today(today);
+        return logs.week(CurrentUser.id(), r.date(), t);
     }
 
     @GetMapping("/stats")
