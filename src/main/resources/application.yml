@@ -1,6 +1,9 @@
 server:
   port: ${PORT:8080}
+  # Render terminates TLS at its proxy; trust X-Forwarded-* so redirects/links use https
   forward-headers-strategy: framework
+  # finish in-flight requests when Render stops the old instance during a deploy
+  shutdown: graceful
   error:
     include-message: always
 

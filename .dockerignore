@@ -1,3 +1,12 @@
+# keep the build context small and secrets out of the image
 target
+.git
+.gitignore
 .idea
+.vscode
+*.iml
 .env
+.env.*
+loadEnv.sh
+render.yaml
+*.md

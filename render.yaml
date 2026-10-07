@@ -1,0 +1,31 @@
+# Render Blueprint for the backend repo (this folder is the repo root).
+# Render: New > Blueprint > pick this repo. It asks for every `sync: false` value on first deploy.
+# Or create it by hand: New > Web Service > this repo > Language: Docker (same settings as below).
+services:
+  - type: web
+    name: habit-tracker-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free                      # sleeps after ~15 min idle; "starter" stays warm
+    region: singapore               # put it in the same region as your Neon project
+    healthCheckPath: /actuator/health
+    autoDeploy: true                # redeploy on every push to the default branch
+    envVars:
+      # Neon > Connect > choose the DIRECT connection (host without "-pooler"); Flyway migrations
+      # need a session connection. Paste it as-is: postgresql://user:pass@ep-....neon.tech/neondb?sslmode=require
+      - key: DATABASE_URL
+        sync: false
+      # openssl rand -base64 32 — use the SAME key as wherever your data was written, and back it up.
+      # Losing or changing it makes stored habit names and notes unreadable.
+      - key: APP_ENCRYPTION_KEY
+        sync: false
+      - key: APP_JWT_SECRET
+        generateValue: true
+      - key: APP_SECURE_COOKIES
+        value: "true"
+      # set to "false" once your account exists to keep the app single-user
+      - key: APP_ALLOW_REGISTRATION
+        value: "true"
+      - key: DB_POOL_SIZE
+        value: "5"

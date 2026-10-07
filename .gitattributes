@@ -1,0 +1,5 @@
+# keep the Maven wrapper runnable on every OS (and inside Linux containers)
+mvnw        text eol=lf
+*.sh        text eol=lf
+mvnw.cmd    text eol=crlf
+*.cmd       text eol=crlf
