@@ -43,7 +43,7 @@ public class SecurityConfig {
                 .referrerPolicy(r -> r.policy(org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)))
             .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .authorizeHttpRequests(a -> a
-                .requestMatchers("/api/auth/**", "/actuator/health", "/error").permitAll()
+                .requestMatchers("/", "/api/auth/**", "/actuator/health", "/error").permitAll()
                 .anyRequest().authenticated())
             .addFilterBefore(new JwtCookieFilter(jwt), UsernamePasswordAuthenticationFilter.class);
         return http.build();

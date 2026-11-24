@@ -42,16 +42,19 @@ public class HabitService {
     @Transactional
     public Habit create(UUID userId, HabitRequest r, LocalDate today) {
         if (r.name() == null || r.name().isBlank()) throw bad("Name is required");
-        if (r.weeklyTarget() == null) throw bad("Weekly target is required");
+        boolean limit = r.inputType() == InputType.LIMIT;
+        if (r.weeklyTarget() == null && !limit) throw bad("Weekly target is required");
         List<Habit> existing = list(userId);
         if (existing.size() >= MAX_HABITS) throw bad("Habit limit reached");
         Habit h = new Habit(userId);
         h.setName(r.name().trim());
-        h.setWeeklyTarget(r.weeklyTarget());
-        h.setKind(r.kind() == null ? HabitKind.BUILD : r.kind());
+        // LIMIT habits have no target (they only lose points); keep a valid placeholder for the column
+        h.setWeeklyTarget(r.weeklyTarget() == null ? 1 : r.weeklyTarget());
+        h.setKind(limit || r.kind() == null ? HabitKind.BUILD : r.kind());
         h.setInputType(r.inputType() == null ? InputType.CHECK : r.inputType());
         h.setOptions(cleanOptions(r.options()));
         h.setMultiSelect(Boolean.TRUE.equals(r.multiSelect()));
+        applyLimits(h, r.limitMin(), r.limitMax(), r.unit());
         h.setPrivate(Boolean.TRUE.equals(r.isPrivate()));
         h.setAlias(blank(r.alias()) ? nextAlias(existing) : r.alias().trim());
         h.setColor(r.color() == null ? PALETTE.get(existing.size() % PALETTE.size()) : r.color());
@@ -66,7 +69,12 @@ public class HabitService {
         if (r.name() != null) { if (r.name().isBlank()) throw bad("Name is required"); h.setName(r.name().trim()); }
         if (r.alias() != null) h.setAlias(r.alias().isBlank() ? nextAlias(list(userId)) : r.alias().trim());
         if (r.kind() != null) h.setKind(r.kind());
+        InputType before = h.getInputType();
+        Double minBefore = h.getLimitMin(), maxBefore = h.getLimitMax();
         if (r.inputType() != null) h.setInputType(r.inputType());
+        if (Boolean.TRUE.equals(r.setLimits())) applyLimits(h, r.limitMin(), r.limitMax(), r.unit());
+        else if (h.getInputType() == InputType.LIMIT && before != InputType.LIMIT) applyLimits(h, h.getLimitMin(), h.getLimitMax(), h.getUnit());
+        if (h.getInputType() == InputType.LIMIT) h.setKind(HabitKind.BUILD);
         if (r.options() != null) h.setOptions(cleanOptions(r.options()));
         if (r.multiSelect() != null) h.setMultiSelect(r.multiSelect());
         if (r.optionRenames() != null && !r.optionRenames().isEmpty()) applyRenames(userId, h, r.optionRenames());
@@ -75,7 +83,37 @@ public class HabitService {
         if (r.color() != null) h.setColor(r.color());
         if (r.startDate() != null) h.setStartDate(r.startDate());
         if (r.archived() != null) h.setArchived(r.archived());
+        // penalties are stored per entry; refresh them when the type or the range changed
+        if (before != h.getInputType() || !Objects.equals(minBefore, h.getLimitMin()) || !Objects.equals(maxBefore, h.getLimitMax())) {
+            recomputePenalties(userId, h);
+        }
         return h;
+    }
+
+    /** LIMIT habits need at least one bound, and min ≤ max. Other types ignore the values. */
+    private void applyLimits(Habit h, Double min, Double max, String unit) {
+        if (h.getInputType() != InputType.LIMIT) return;
+        if (min == null && max == null) throw bad("Set a minimum, a maximum, or both");
+        if (min != null && max != null && min > max) throw bad("The minimum can't be above the maximum");
+        if ((min != null && !Double.isFinite(min)) || (max != null && !Double.isFinite(max))) throw bad("Limits must be numbers");
+        h.setLimitMin(min);
+        h.setLimitMax(max);
+        h.setUnit(unit == null || unit.isBlank() ? null : unit.trim());
+    }
+
+    /** Re-evaluates every logged amount against the habit's current range. */
+    private void recomputePenalties(UUID userId, Habit h) {
+        for (Entry e : entries.findByUserIdAndHabitId(userId, h.getId())) {
+            boolean penalty = false;
+            if (h.getInputType() == InputType.LIMIT && e.getValue() != null) {
+                try {
+                    penalty = h.breaksLimit(Double.parseDouble(e.getValue().trim().replace(',', '.')));
+                } catch (NumberFormatException ignored) {
+                    // not an amount (logged while the habit had another type)
+                }
+            }
+            if (e.isPenalty() != penalty) e.setPenalty(penalty);
+        }
     }
 
     /** Adds an option to a SELECT habit if it isn't there yet (used when an option is created while logging). */

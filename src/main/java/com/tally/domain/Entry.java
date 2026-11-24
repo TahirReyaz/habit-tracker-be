@@ -6,7 +6,10 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
-/** One logged cell: habit x day. For BUILD habits it means "done", for AVOID habits it means "slipped" — whatever the input type. */
+/**
+ * One logged cell: habit x day. For BUILD habits it means "done", for AVOID habits it means "slipped" — whatever
+ * the input type. For LIMIT habits it holds the amount; {@code penalty} says whether it broke the limit.
+ */
 @Entity
 @Table(name = "entries")
 public class Entry {
@@ -22,7 +25,7 @@ public class Entry {
     @Column(nullable = false)
     private LocalDate day;
 
-    /** SELECT: the chosen option(s), newline separated. TEXT: the text itself. CHECK: null. Encrypted. */
+    /** SELECT: the chosen option(s), newline separated. TEXT: the text. LIMIT: the amount. CHECK: null. Encrypted. */
     @Convert(converter = Encrypted.class)
     @Column(columnDefinition = "text")
     private String value;
@@ -30,6 +33,10 @@ public class Entry {
     @Convert(converter = Encrypted.class)
     @Column(columnDefinition = "text")
     private String note;
+
+    /** LIMIT only: the amount was outside the habit's allowed range (a -1 mark). Not encrypted. */
+    @Column(nullable = false)
+    private boolean penalty;
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
@@ -54,5 +61,7 @@ public class Entry {
     public void setValue(String value) { this.value = value; this.updatedAt = Instant.now(); }
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note; this.updatedAt = Instant.now(); }
+    public boolean isPenalty() { return penalty; }
+    public void setPenalty(boolean penalty) { this.penalty = penalty; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

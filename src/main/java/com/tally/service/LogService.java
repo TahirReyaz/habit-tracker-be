@@ -54,7 +54,7 @@ public class LogService {
 
         ScoreEngine.WeekScore score = ScoreEngine.scoreWeek(
                 shown.stream().map(LogService::info).toList(),
-                weekEntries.stream().map(e -> new ScoreEngine.Log(e.getHabitId(), e.getDay())).toList(),
+                weekEntries.stream().map(e -> new ScoreEngine.Log(e.getHabitId(), e.getDay(), e.isPenalty())).toList(),
                 start, today, weekTargets.between(userId, ws, start, end));
 
         return new WeekResponse(start, end, today, ws, dayDtos,
@@ -66,14 +66,16 @@ public class LogService {
 
     /**
      * Saves one habit x day. What "filled in" means depends on the habit's input type:
-     * CHECK needs nothing, SELECT needs an option (new ones are added to the habit), TEXT needs non-empty text.
-     * The saved row is the day's point; to take the point away the client calls remove().
+     * CHECK needs nothing, SELECT needs an option (new ones are added to the habit), TEXT needs non-empty text,
+     * LIMIT needs a number (and is marked as a penalty when it falls outside the habit's range).
+     * For CHECK/SELECT/TEXT the saved row is the day's point; to take it away the client calls remove().
      */
     @Transactional
     public LogResult upsert(UUID userId, EntryRequest r) {
         Habit h = habitService.get(userId, r.habitId());
         String value = trimToNull(r.value());
         String note = trimToNull(r.note());
+        boolean penalty = false;
         switch (h.getInputType()) {
             case CHECK -> value = null;
             case TEXT -> {
@@ -95,6 +97,11 @@ public class LogService {
                 }
                 value = String.join("\n", clean);
             }
+            case LIMIT -> {
+                double amount = parseAmount(value);
+                penalty = h.breaksLimit(amount);
+                value = formatAmount(amount);
+            }
         }
         // logging a day before the habit's "counting from" date moves that date back,
         // otherwise back-filled days would be stored but never scored
@@ -104,7 +111,27 @@ public class LogService {
                 .orElseGet(() -> new Entry(userId, h.getId(), r.date()));
         e.setValue(v);
         e.setNote(note);
+        e.setPenalty(penalty);
         return new LogResult(EntryDto.of(entries.save(e)), h.getOptions(), h.getStartDate());
+    }
+
+    /** Accepts "90", "1.5", "1,5" and "1 234"; rejects anything else. */
+    static double parseAmount(String raw) {
+        if (raw == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter an amount to log this day");
+        String s = raw.trim().replace(" ", "").replace("\u00a0", "");
+        if (s.matches("-?\\d+,\\d+")) s = s.replace(',', '.');
+        try {
+            double d = Double.parseDouble(s);
+            if (Double.isNaN(d) || Double.isInfinite(d)) throw new NumberFormatException();
+            return d;
+        } catch (NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "\"" + raw.trim() + "\" isn't a number");
+        }
+    }
+
+    /** 90.0 -> "90", 1.50 -> "1.5" */
+    static String formatAmount(double d) {
+        return java.math.BigDecimal.valueOf(d).stripTrailingZeros().toPlainString();
     }
 
     private static String trimToNull(String s) {
@@ -142,7 +169,7 @@ public class LogService {
             Habit h = habitService.create(userId, new HabitRequest(ih.name().trim(), null,
                     ih.kind() == null ? HabitKind.BUILD : ih.kind(),
                     ih.inputType() == null ? InputType.TEXT : ih.inputType(), null, null, false,
-                    ih.weeklyTarget(), false, null, earliest, false), today);
+                    ih.weeklyTarget(), false, null, earliest, false, null, null, null, null), today);
             byName.put(k, h);
             created++;
         }
@@ -164,6 +191,17 @@ public class LogService {
                     e.setValue(opt);
                     e.setNote(null);
                 }
+                case LIMIT -> {
+                    // only numeric cells make sense for an amount; anything else is kept as a note
+                    try {
+                        double amount = parseAmount(text);
+                        e.setValue(formatAmount(amount));
+                        e.setPenalty(h.breaksLimit(amount));
+                    } catch (ResponseStatusException notANumber) {
+                        e.setValue(null);
+                        e.setNote(text);
+                    }
+                }
             }
             entries.save(e);
             n++;
@@ -173,8 +211,9 @@ public class LogService {
     }
 
     static ScoreEngine.HabitInfo info(Habit h) {
-        return new ScoreEngine.HabitInfo(h.getId(),
-                h.getKind() == HabitKind.AVOID ? ScoreEngine.Kind.AVOID : ScoreEngine.Kind.BUILD,
+        ScoreEngine.Kind kind = h.getInputType() == InputType.LIMIT ? ScoreEngine.Kind.LIMIT
+                : h.getKind() == HabitKind.AVOID ? ScoreEngine.Kind.AVOID : ScoreEngine.Kind.BUILD;
+        return new ScoreEngine.HabitInfo(h.getId(), kind,
                 h.getWeeklyTarget(), h.getStartDate(), h.isArchived());
     }
 }

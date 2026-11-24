@@ -41,6 +41,16 @@ public class Habit {
     @Column(name = "multi_select", nullable = false)
     private boolean multiSelect;
 
+    /** LIMIT only: allowed range (either bound may be absent) and a display unit. */
+    @Column(name = "limit_min")
+    private Double limitMin;
+
+    @Column(name = "limit_max")
+    private Double limitMax;
+
+    @Column(length = 16)
+    private String unit;
+
     @Column(name = "weekly_target", nullable = false)
     private short weeklyTarget;
 
@@ -84,6 +94,18 @@ public class Habit {
     }
     public boolean isMultiSelect() { return multiSelect; }
     public void setMultiSelect(boolean multiSelect) { this.multiSelect = multiSelect; }
+    public Double getLimitMin() { return limitMin; }
+    public void setLimitMin(Double limitMin) { this.limitMin = limitMin; }
+    public Double getLimitMax() { return limitMax; }
+    public void setLimitMax(Double limitMax) { this.limitMax = limitMax; }
+    public String getUnit() { return unit; }
+    public void setUnit(String unit) { this.unit = unit; }
+
+    /** LIMIT: true when {@code amount} falls outside the allowed range (bounds are inclusive). */
+    public boolean breaksLimit(double amount) {
+        return (limitMin != null && amount < limitMin) || (limitMax != null && amount > limitMax);
+    }
+
     public int getWeeklyTarget() { return weeklyTarget; }
     public void setWeeklyTarget(int weeklyTarget) { this.weeklyTarget = (short) weeklyTarget; }
     public boolean isPrivate() { return isPrivate; }

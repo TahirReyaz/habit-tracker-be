@@ -13,7 +13,10 @@ services:
     autoDeploy: true                # redeploy on every push to the default branch
     envVars:
       # Neon > Connect > choose the DIRECT connection (host without "-pooler"); Flyway migrations
-      # need a session connection. Paste it as-is: postgresql://user:pass@ep-....neon.tech/neondb?sslmode=require
+      # need a session connection. Paste Neon's string as-is — any of these work and carry the credentials:
+      #   postgresql://user:pass@ep-....neon.tech/neondb?sslmode=require
+      #   jdbc:postgresql://ep-....neon.tech/neondb?user=...&password=...&sslmode=require
+      # Only if your URL has no user/password in it, also add DATABASE_USERNAME and DATABASE_PASSWORD.
       - key: DATABASE_URL
         sync: false
       # openssl rand -base64 32 — use the SAME key as wherever your data was written, and back it up.

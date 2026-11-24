@@ -67,4 +67,23 @@ class ScoreEngineTest {
         assertEquals(0, st.weeks().get(2).target(), "target 0 leaves the habit out of that week's total");
         assertEquals(1, st.habits().get(0).weeksHit());
     }
+
+    @Test
+    void limitHabitsOnlyLoseMarks() {
+        UUID screen = UUID.randomUUID();
+        List<HabitInfo> hs = List.of(new HabitInfo(screen, Kind.LIMIT, 1, start, false), habits.get(0));
+        LocalDate prev = wk.minusWeeks(1);
+        List<Log> logs = new ArrayList<>();
+        for (int d = 0; d < 7; d++) logs.add(new Log(screen, prev.plusDays(d), d == 2 || d == 5)); // two days over the limit
+        for (int d = 0; d < 5; d++) logs.add(new Log(build, prev.plusDays(d)));
+        WeekScore w = ScoreEngine.scoreWeek(hs, logs, prev, today, (h, s) -> 3);
+        assertEquals(-2, w.habits().get(0).points(), "each out-of-range day is -1");
+        assertEquals(0, w.habits().get(0).target(), "no target, and week overrides don't apply");
+        assertEquals(3, w.points(), "5 - 2");
+        assertEquals(5, w.target());
+
+        HabitStats st = ScoreEngine.stats(hs, logs, Set.of(), 4, today, 1).habits().get(0);
+        assertEquals(2, Arrays.stream(st.weekday()).sum(), "weekday pattern counts breaches only");
+        assertEquals(7, st.totalDays());
+    }
 }

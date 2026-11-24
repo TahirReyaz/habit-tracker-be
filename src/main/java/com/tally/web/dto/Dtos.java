@@ -1,8 +1,8 @@
 package com.tally.web.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.tally.domain.*;
 import com.tally.scoring.ScoreEngine;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 
@@ -42,18 +42,22 @@ public final class Dtos {
     public record ChangePasswordRequest(@NotBlank String current, @NotBlank @Size(min = 8, max = 128) String next) {}
 
     // ---- habits ----
+    /** limitMin / limitMax / unit only mean something for LIMIT habits (null = no bound). */
     public record HabitDto(UUID id, String name, String alias, HabitKind kind, InputType inputType, List<String> options,
                            boolean multiSelect, int weeklyTarget, @JsonProperty("isPrivate") boolean isPrivate, String color,
-                           int position, LocalDate startDate, boolean archived) {
+                           int position, LocalDate startDate, boolean archived,
+                           Double limitMin, Double limitMax, String unit) {
         public static HabitDto of(Habit h) {
             return new HabitDto(h.getId(), h.getName(), h.getAlias(), h.getKind(), h.getInputType(), h.getOptions(),
-                    h.isMultiSelect(), h.getWeeklyTarget(), h.isPrivate(), h.getColor(), h.getPosition(), h.getStartDate(), h.isArchived());
+                    h.isMultiSelect(), h.getWeeklyTarget(), h.isPrivate(), h.getColor(), h.getPosition(), h.getStartDate(),
+                    h.isArchived(), h.getLimitMin(), h.getLimitMax(), h.getUnit());
         }
     }
 
     /**
-     * Used for create (name + weeklyTarget required) and patch (all optional).
+     * Used for create (name + weeklyTarget required, except for LIMIT habits) and patch (all optional).
      * optionRenames (old label -> new label) rewrites past entries of a SELECT habit so history follows a rename.
+     * setLimits = true applies limitMin / limitMax / unit exactly as sent (null clears a bound); on create they always apply.
      */
     public record HabitRequest(@Size(min = 1, max = 80) String name,
                                @Size(max = 40) String alias,
@@ -66,24 +70,31 @@ public final class Dtos {
                                @JsonProperty("isPrivate") Boolean isPrivate,
                                @Pattern(regexp = "^#[0-9a-fA-F]{6}$") String color,
                                LocalDate startDate,
-                               Boolean archived) {}
+                               Boolean archived,
+                               Double limitMin,
+                               Double limitMax,
+                               @Size(max = 16) String unit,
+                               Boolean setLimits) {}
 
     public record ReorderRequest(@NotNull List<UUID> ids) {}
 
     // ---- logging ----
     /**
-     * value: the text (TEXT) or a single option (SELECT). values: the picked options (SELECT, several when multi-select).
-     * Both ignored for CHECK. note: optional extra for CHECK/SELECT.
+     * value: the text (TEXT), a single option (SELECT) or the amount (LIMIT). values: the picked options
+     * (SELECT, several when multi-select). Both ignored for CHECK. note: optional extra for CHECK/SELECT/LIMIT.
      */
     public record EntryRequest(@NotNull UUID habitId, @NotNull LocalDate date,
                                @Size(max = 2000) String value,
                                @Size(max = 50) List<@Size(max = 60) String> values,
                                @Size(max = 2000) String note) {}
 
-    /** value: raw stored value (TEXT text; SELECT options newline-joined). values: SELECT options as a list. */
-    public record EntryDto(UUID habitId, LocalDate date, String value, List<String> values, String note) {
+    /**
+     * value: raw stored value (TEXT text; SELECT options newline-joined; LIMIT amount). values: SELECT options as a list.
+     * penalty: LIMIT only — the amount broke the habit's limit (a −1 mark).
+     */
+    public record EntryDto(UUID habitId, LocalDate date, String value, List<String> values, String note, boolean penalty) {
         public static EntryDto of(Entry e) {
-            return new EntryDto(e.getHabitId(), e.getDay(), e.getValue(), e.getValues(), e.getNote());
+            return new EntryDto(e.getHabitId(), e.getDay(), e.getValue(), e.getValues(), e.getNote(), e.isPenalty());
         }
     }
 
@@ -105,8 +116,16 @@ public final class Dtos {
     /** target null = back to the habit's usual weekly target. date = any day of the week. */
     public record WeekTargetRequest(@NotNull UUID habitId, @NotNull LocalDate date, @Min(0) @Max(7) Integer target) {}
 
-    /** optionCounts: SELECT habit id -> option label -> number of days in range. */
-    public record StatsResponse(List<HabitDto> habits, ScoreEngine.Stats stats, Map<UUID, Map<String, Integer>> optionCounts) {}
+    /** Summary of the logged amounts of one LIMIT habit in the stats range. */
+    public record LimitStat(int days, Double avg, Double lowest, Double highest, int over, int under) {}
+
+    /**
+     * optionCounts: SELECT habit id -> option label -> number of days in range.
+     * limitStats: LIMIT habit id -> summary of logged amounts in range.
+     */
+    public record StatsResponse(List<HabitDto> habits, ScoreEngine.Stats stats,
+                                Map<UUID, Map<String, Integer>> optionCounts,
+                                Map<UUID, LimitStat> limitStats) {}
 
     // ---- import ----
     public record ImportHabit(@NotBlank @Size(max = 80) String name, @Min(1) @Max(7) int weeklyTarget, HabitKind kind, InputType inputType) {}

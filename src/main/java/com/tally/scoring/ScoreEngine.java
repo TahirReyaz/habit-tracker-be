@@ -14,15 +14,20 @@ import java.util.*;
  *  - AVOID habit: every elapsed day in the week WITHOUT a logged slip is 1 point, capped at the target.
  *  - Days before a habit's start date never count.
  *  - Weekly total = sum of points / sum of targets of habits that had started by the end of that week.
+ *  - LIMIT habit (e.g. "screen time ≤ 120 min"): every logged day outside the allowed min/max is −1 point,
+ *    every other day is 0. It has no target and adds nothing to the weekly target.
  *  - A week can override a habit's target (e.g. a holiday: 5 -> 4). Target 0 excuses the habit for that week:
  *    it adds nothing to the total and neither counts toward nor breaks streaks / hit rate.
  */
 public final class ScoreEngine {
 
-    public enum Kind { BUILD, AVOID }
+    public enum Kind { BUILD, AVOID, LIMIT }
 
     public record HabitInfo(UUID id, Kind kind, int target, LocalDate startDate, boolean archived) {}
-    public record Log(UUID habitId, LocalDate day) {}
+    /** penalty: for LIMIT habits, whether the logged amount was outside the allowed range. */
+    public record Log(UUID habitId, LocalDate day, boolean penalty) {
+        public Log(UUID habitId, LocalDate day) { this(habitId, day, false); }
+    }
 
     /** target = the target in force that week; baseTarget = the habit's usual target. */
     public record HabitWeek(UUID habitId, int count, int points, int target, boolean started, int baseTarget) {
@@ -64,19 +69,25 @@ public final class ScoreEngine {
                                       Targets targets) {
         LocalDate weekEnd = weekStart.plusDays(6);
         Map<UUID, Set<LocalDate>> byHabit = index(logs, weekStart, weekEnd);
+        Map<UUID, Set<LocalDate>> penalties = penaltyIndex(logs, weekStart, weekEnd);
         List<HabitWeek> out = new ArrayList<>();
         int pts = 0, tgt = 0;
         for (HabitInfo h : habits) {
             Set<LocalDate> days = byHabit.getOrDefault(h.id(), Set.of());
             boolean started = !h.startDate().isAfter(weekEnd);
             Integer override = targets.forWeek(h.id(), weekStart);
-            int target = override == null ? h.target() : Math.max(0, Math.min(7, override));
+            int target = h.kind() == Kind.LIMIT ? 0
+                    : override == null ? h.target() : Math.max(0, Math.min(7, override));
             if (h.archived() && days.isEmpty()) continue;
             int count = 0, points = 0;
             if (started) {
                 if (h.kind() == Kind.BUILD) {
                     count = (int) days.stream().filter(d -> !d.isBefore(h.startDate())).count();
                     points = Math.min(count, target);
+                } else if (h.kind() == Kind.LIMIT) {
+                    count = (int) days.stream().filter(d -> !d.isBefore(h.startDate())).count();
+                    points = -(int) penalties.getOrDefault(h.id(), Set.of()).stream()
+                            .filter(d -> !d.isBefore(h.startDate())).count();
                 } else {
                     int slips = 0, eligible = 0;
                     for (LocalDate d = weekStart; !d.isAfter(weekEnd); d = d.plusDays(1)) {
@@ -90,7 +101,7 @@ public final class ScoreEngine {
                 pts += points;
                 tgt += target;
             }
-            out.add(new HabitWeek(h.id(), count, points, target, started, h.target()));
+            out.add(new HabitWeek(h.id(), count, points, target, started, h.kind() == Kind.LIMIT ? 0 : h.target()));
         }
         return new WeekScore(weekStart, pts, tgt, out);
     }
@@ -114,10 +125,13 @@ public final class ScoreEngine {
         for (int i = 0; i < nWeeks; i++) weeks.add(scoreWeek(habits, allLogs, from.plusWeeks(i), today, targets));
 
         Map<UUID, Set<LocalDate>> all = index(allLogs, LocalDate.MIN, LocalDate.MAX);
+        Map<UUID, Set<LocalDate>> allPenalties = penaltyIndex(allLogs, LocalDate.MIN, LocalDate.MAX);
 
         List<HabitStats> hs = new ArrayList<>();
         for (HabitInfo h : habits) {
             Set<LocalDate> days = all.getOrDefault(h.id(), Set.of());
+            Set<LocalDate> over = allPenalties.getOrDefault(h.id(), Set.of());
+            boolean limit = h.kind() == Kind.LIMIT;
             int[] weekday = new int[7];
             int[] weekly = new int[nWeeks];
             int weeksCounted = 0, weeksHit = 0, totalDays = 0, completedPoints = 0;
@@ -126,9 +140,10 @@ public final class ScoreEngine {
                 HabitWeek hw = find(ws, h.id());
                 if (hw == null || !hw.started()) { weekly[i] = 0; continue; }
                 weekly[i] = hw.points();
-                if (hw.target() == 0) continue; // excused week
+                if (hw.target() == 0 && !limit) continue; // excused week
                 boolean completed = ws.start().plusDays(6).isBefore(today);
-                boolean hit = hw.points() >= hw.target();
+                // a LIMIT week is "hit" when it finished without a single out-of-range day
+                boolean hit = limit ? completed && hw.points() == 0 : hw.points() >= hw.target();
                 if (completed || hit) {
                     weeksCounted++;
                     completedPoints += hw.points();
@@ -137,8 +152,9 @@ public final class ScoreEngine {
             }
             for (LocalDate d : days) {
                 if (d.isBefore(from) || d.isAfter(to) || d.isBefore(h.startDate())) continue;
-                weekday[d.getDayOfWeek().getValue() - 1]++;
-                if (h.kind() == Kind.BUILD) totalDays++;
+                // LIMIT: weekday pattern of the out-of-range days; others: of every log
+                if (!limit || over.contains(d)) weekday[d.getDayOfWeek().getValue() - 1]++;
+                if (h.kind() == Kind.BUILD || limit) totalDays++;
             }
             if (h.kind() == Kind.AVOID) {
                 for (LocalDate d = max(from, h.startDate()); !d.isAfter(min(to, today)); d = d.plusDays(1)) {
@@ -148,7 +164,7 @@ public final class ScoreEngine {
 
             // week streaks walk the full history, not just the range
             int[] weekStreaks = weekStreaks(h, allLogs, today, isoWeekStart, targets);
-            int[] dayStreaks = dayStreaks(h, days, today);
+            int[] dayStreaks = dayStreaks(h, limit ? over : days, today);
 
             double hitRate = weeksCounted == 0 ? 0 : (double) weeksHit / weeksCounted;
             double avg = weeksCounted == 0 ? 0 : (double) completedPoints / weeksCounted;
@@ -158,19 +174,20 @@ public final class ScoreEngine {
 
         // daily heatmap
         List<DayCell> cells = new ArrayList<>();
-        Map<LocalDate, List<UUID>> logsByDay = new HashMap<>();
+        Map<LocalDate, List<Log>> logsByDay = new HashMap<>();
         for (Log l : allLogs) if (!l.day().isBefore(from) && !l.day().isAfter(to))
-            logsByDay.computeIfAbsent(l.day(), k -> new ArrayList<>()).add(l.habitId());
+            logsByDay.computeIfAbsent(l.day(), k -> new ArrayList<>()).add(l);
         Map<UUID, HabitInfo> hById = new HashMap<>();
         habits.forEach(h -> hById.put(h.id(), h));
         for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
             final LocalDate day = d;
             int possible = (int) habits.stream().filter(h -> h.kind() == Kind.BUILD && !h.archived() && !h.startDate().isAfter(day)).count();
             int done = 0, slips = 0;
-            for (UUID id : logsByDay.getOrDefault(d, List.of())) {
-                HabitInfo h = hById.get(id);
+            for (Log l : logsByDay.getOrDefault(d, List.of())) {
+                HabitInfo h = hById.get(l.habitId());
                 if (h == null || d.isBefore(h.startDate())) continue;
-                if (h.kind() == Kind.BUILD) done++; else slips++;
+                if (h.kind() == Kind.BUILD) done++;
+                else if (h.kind() == Kind.AVOID || l.penalty()) slips++; // slips and limit breaches
             }
             cells.add(new DayCell(d, done, possible, slips, restDays.contains(d)));
         }
@@ -204,8 +221,9 @@ public final class ScoreEngine {
         boolean lastIsCurrent = false;
         for (LocalDate w = first; !w.isAfter(thisWeek); w = w.plusWeeks(1)) {
             HabitWeek hw = scoreWeek(one, mine, w, today, targets).habits().get(0);
-            if (hw.target() == 0) continue; // excused weeks neither extend nor break a streak
-            boolean hit = hw.points() >= hw.target();
+            boolean limit = h.kind() == Kind.LIMIT;
+            if (hw.target() == 0 && !limit) continue; // excused weeks neither extend nor break a streak
+            boolean hit = limit ? hw.points() == 0 : hw.points() >= hw.target();
             hits.add(hit);
             lastIsCurrent = w.equals(thisWeek);
             run = hit ? run + 1 : 0;
@@ -219,7 +237,10 @@ public final class ScoreEngine {
         return new int[]{current, longest};
     }
 
-    /** [current, longest] consecutive days: logged days for BUILD, clean days for AVOID. */
+    /**
+     * [current, longest] consecutive days: logged days for BUILD, clean days for AVOID,
+     * in-range days for LIMIT (then {@code days} holds the out-of-range days).
+     */
     static int[] dayStreaks(HabitInfo h, Set<LocalDate> days, LocalDate today) {
         if (h.startDate().isAfter(today)) return new int[]{0, 0};
         if (h.kind() == Kind.BUILD) {
@@ -253,6 +274,15 @@ public final class ScoreEngine {
         Map<UUID, Set<LocalDate>> m = new HashMap<>();
         for (Log l : logs) {
             if (l.day().isBefore(from) || l.day().isAfter(to)) continue;
+            m.computeIfAbsent(l.habitId(), k -> new HashSet<>()).add(l.day());
+        }
+        return m;
+    }
+
+    private static Map<UUID, Set<LocalDate>> penaltyIndex(Collection<Log> logs, LocalDate from, LocalDate to) {
+        Map<UUID, Set<LocalDate>> m = new HashMap<>();
+        for (Log l : logs) {
+            if (!l.penalty() || l.day().isBefore(from) || l.day().isAfter(to)) continue;
             m.computeIfAbsent(l.habitId(), k -> new HashSet<>()).add(l.day());
         }
         return m;
